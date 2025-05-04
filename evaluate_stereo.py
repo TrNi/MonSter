@@ -383,11 +383,66 @@ def validate_middlebury(model, iters=32, split='F', mixed_prec=False):
     return {f'middlebury{split}-epe': epe, f'middlebury{split}-d1': d1}
 
 
+@torch.no_grad()
+def batched_stereo_inference(model, left_npy_file, right_npy_file, output_path, stereo_params_npz_file, iters=32, mixed_prec=False):
+    """
+    Load batched left/right stereo images from .npy files, perform inference once, and save the flow output.
+
+    Parameters:
+        model: Model accepting batched input (N,C,H,W) and returning (N,2,H,W) flow.
+        left_npy_file (str or Path): Path to left image batch (.npy), shape (N,H,W,C).
+        right_npy_file (str or Path): Path to right image batch (.npy), shape (N,H,W,C).
+        stereo_params_npz_file (str or Path): Path to stereo parameters (.npz).
+        output_npy_file (str or Path): Path to save the output depth prediction (.npy), shape (N,H,W).
+        iters (int): Number of update iterations for the model.
+        mixed_prec (bool): Whether to use AMP.
+    """
+    from raft.utils.utils import InputPadder
+    from torch.cuda.amp import autocast
+
+    model.eval()
+
+    # Load batched images and convert to tensors
+    left_np = np.load(left_npy_file)     # (N, H, W, C)
+    right_np = np.load(right_npy_file)   # (N, H, W, C)
+
+    # Transpose to (N, C, H, W) and move to GPU
+    image0 = torch.from_numpy(left_np).permute(0, 3, 1, 2).float().cuda()
+    image1 = torch.from_numpy(right_np).permute(0, 3, 1, 2).float().cuda()
+
+    # Pad the entire batch
+    padder = InputPadder(image0.shape, divis_by=32)
+    image0, image1 = padder.pad(image0, image1)
+
+    # Inference
+    with autocast(enabled=mixed_prec):
+        disp_pr = model(image0, image1, iters=iters, test_mode=True)  # (N, 1, H, W)
+
+    # Unpad and move to CPU
+    disp_pr = padder.unpad(disp_pr.float()).squeeze().cpu().numpy()
+
+    stereo_params = np.load(stereo_params_npz_file, allow_pickle = True)
+    
+    P1 = stereo_params['P1']
+    P1[:2] *= args.scale
+    f_left = P1[0,0]
+    baseline = stereo_params['baseline']
+    depth = f_left*baseline/(disp_pr+1e-6)
+    np.save(output_path, depth)
+
+    return
+    
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--restore_ckpt', help="restore checkpoint", default="/data2/cjd/mono_fusion/checkpoints/sceneflow.pth")
+    parser.add_argument('--left_npy_file', help="left image batch (.npy)", default=None)
+    parser.add_argument('--right_npy_file', help="right image batch (.npy)", default=None)
+    parser.add_argument('--output_path', help="output depth prediction (.npy)", default=None)
+    parser.add_argument('--stereo_params_npz_file', help="stereo parameters (.npz)", default=None)
 
-    parser.add_argument('--dataset', help="dataset for evaluation", default='sceneflow', choices=["eth3d", "kitti", "sceneflow", "vkitti", "driving"] + [f"middlebury_{s}" for s in 'FHQ'])
+    parser.add_argument('--dataset', help="dataset for evaluation", default='sceneflow', choices=["eth3d", "kitti", "sceneflow", "vkitti", "driving", "npy_arrays"] + [f"middlebury_{s}" for s in 'FHQ'])
     parser.add_argument('--mixed_precision', default=False, action='store_true', help='use mixed precision')
     parser.add_argument('--valid_iters', type=int, default=32, help='number of flow-field updates during forward pass')
 
@@ -458,3 +513,6 @@ if __name__ == '__main__':
 
     elif args.dataset == 'driving':
         validate_driving(model, iters=args.valid_iters, mixed_prec=use_mixed_precision)
+
+    elif args.dataset == 'npy_arrays':
+        batched_stereo_inference(model, args.left_npy_file, args.right_npy_file, args.output_path, args.stereo_params_npz_file, iters=args.valid_iters, mixed_prec=use_mixed_precision)
