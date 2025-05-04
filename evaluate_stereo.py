@@ -8,12 +8,12 @@ import logging
 import numpy as np
 import torch
 from tqdm import tqdm
-from monster import Monster, autocast
+from core.monster import Monster, autocast
 
-import stereo_datasets as datasets
-from utils.utils import InputPadder
+import core.stereo_datasets as datasets
+from core.utils.utils import InputPadder
 from PIL import Image
-import torch.nn.functional as F
+# import torch.nn.functional as F
 
 class NormalizeTensor(object):
     """Normalize a tensor by given mean and std."""
@@ -397,8 +397,8 @@ def batched_stereo_inference(model, left_npy_file, right_npy_file, output_path, 
         iters (int): Number of update iterations for the model.
         mixed_prec (bool): Whether to use AMP.
     """
-    from raft.utils.utils import InputPadder
-    from torch.cuda.amp import autocast
+    # from raft.utils.utils import InputPadder
+    # from torch.cuda.amp import autocast
 
     model.eval()
 
@@ -413,10 +413,12 @@ def batched_stereo_inference(model, left_npy_file, right_npy_file, output_path, 
     # Pad the entire batch
     padder = InputPadder(image0.shape, divis_by=32)
     image0, image1 = padder.pad(image0, image1)
+    print(image0.shape, image1.shape)
+    image0, image1 = image0[0,...][None,...], image1[0,...][None,...]
 
     # Inference
     with autocast(enabled=mixed_prec):
-        disp_pr = model(image0, image1, iters=iters, test_mode=True)  # (N, 1, H, W)
+        disp_pr = model(image0[:3,...], image1[:3,...], iters=iters, test_mode=True)  # (N, 1, H, W)
 
     # Unpad and move to CPU
     disp_pr = padder.unpad(disp_pr.float()).squeeze().cpu().numpy()
@@ -424,7 +426,7 @@ def batched_stereo_inference(model, left_npy_file, right_npy_file, output_path, 
     stereo_params = np.load(stereo_params_npz_file, allow_pickle = True)
     
     P1 = stereo_params['P1']
-    P1[:2] *= args.scale
+    # P1[:2] *= args.scale
     f_left = P1[0,0]
     baseline = stereo_params['baseline']
     depth = f_left*baseline/(disp_pr+1e-6)

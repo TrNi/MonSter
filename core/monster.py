@@ -291,7 +291,8 @@ class Monster(nn.Module):
 
         depth_anything = DepthAnythingV2(**mono_model_configs[args.encoder])
         depth_anything_decoder = DepthAnythingV2_decoder(**mono_model_configs[args.encoder])
-        state_dict_dpt = torch.load(f'./pretrained/depth_anything_v2_{args.encoder}.pth', map_location='cpu')
+        #/content/MonSter/depth_anything_v2/pretrained
+        state_dict_dpt = torch.load(f'/content/models/depth_anything_v2_vitl.pth', map_location='cpu')
         # state_dict_dpt = torch.load(f'/home/cjd/cvpr2025/fusion/Depth-Anything-V2-list3/depth_anything_v2_{args.encoder}.pth', map_location='cpu')
         depth_anything.load_state_dict(state_dict_dpt, strict=True)
         depth_anything_decoder.load_state_dict(state_dict_dpt, strict=False)
