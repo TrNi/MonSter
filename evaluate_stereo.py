@@ -409,7 +409,7 @@ def batched_stereo_inference(model, left_h5_file, right_h5_file, out_dir, stereo
     f_left = P1[0,0]
     baseline = stereo_params['baseline']
 
-    out_dir = Path(out_dir)
+    #out_dir = Path(out_dir)
     os.makedirs(out_dir, exist_ok=True)       
     
     if left_h5_file and right_h5_file:
