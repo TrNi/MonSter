@@ -558,7 +558,7 @@ if __name__ == '__main__':
             else:
                 ckpt["module." + key] = checkpoint[key]  # 添加 "module."
 
-        model.load_state_dict(ckpt, strict=True)
+        model.load_state_dict(ckpt, strict=True, weights_only=True)
 
         logging.info(f"Done loading checkpoint")
 
@@ -589,10 +589,10 @@ if __name__ == '__main__':
     elif args.dataset == 'h5_arrays':
         batched_stereo_inference(
             model=model,
-            left_h5_file=args.left_h5,
-            right_h5_file=args.right_h5,
-            output_h5_file=args.output_h5,
-            stereo_params_npz_file=args.stereo_params,
+            left_h5_file=args.left_h5_file,
+            right_h5_file=args.right_h5_file,
+            output_h5_file=args.output_h5_file,
+            stereo_params_npz_file=args.stereo_params_npz_file,
             iters=args.valid_iters,
             mixed_prec=use_mixed_precision,
             batch_size=args.batch_size
