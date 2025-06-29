@@ -386,7 +386,7 @@ def validate_middlebury(model, iters=32, split='F', mixed_prec=False):
 import h5py
 
 @torch.no_grad()
-def batched_stereo_inference(model, left_h5_file, right_h5_file, output_h5_file, stereo_params_npz_file, 
+def batched_stereo_inference(model, left_h5_file, right_h5_file, out_dir, stereo_params_npz_file, 
                            iters=32, mixed_prec=False, batch_size=4):
     """
     Load batched left/right stereo images from HDF5 files, perform inference, and save the output.
@@ -403,19 +403,19 @@ def batched_stereo_inference(model, left_h5_file, right_h5_file, output_h5_file,
     """
     model.eval()
     
-    stereo_params = np.load(args.stereo_params_npz_file, allow_pickle=True)
+    stereo_params = np.load(stereo_params_npz_file, allow_pickle=True)
     P1 = stereo_params['P1']
     #P1[:2] *= args.scale
     f_left = P1[0,0]
     baseline = stereo_params['baseline']
 
-    out_dir = Path(args.out_dir)
+    out_dir = Path(out_dir)
     os.makedirs(out_dir, exist_ok=True)       
     
-    if args.left_h5_file and args.right_h5_file:
-      with h5py.File(args.left_h5_file, 'r') as f:
+    if left_h5_file and right_h5_file:
+      with h5py.File(left_h5_file, 'r') as f:
         left_all = f['left'][()]   # or np.array(f['left'])
-      with h5py.File(args.right_h5_file, 'r') as f:
+      with h5py.File(right_h5_file, 'r') as f:
         right_all = f['right'][()]
       print(left_all.shape, right_all.shape)
     
@@ -426,9 +426,7 @@ def batched_stereo_inference(model, left_h5_file, right_h5_file, output_h5_file,
     N,H,W,C = left_all.shape
     print(f"Found {N} images. Saving files to {out_dir}.")
     disp_all = []
-    depth_all = []
-
-    
+    depth_all = []    
     
     # with h5py.File(left_h5_file, 'r') as f_left, \
     #      h5py.File(right_h5_file, 'r') as f_right, \
@@ -445,9 +443,9 @@ def batched_stereo_inference(model, left_h5_file, right_h5_file, output_h5_file,
         
     # Process in batches
     with torch.no_grad():
-        for i in tqdm(range(0, N, args.batch_size), desc="Processing batches"):            
-            img0 = left_all[i:i+args.batch_size]
-            img1 = right_all[i:i+args.batch_size]
+        for i in tqdm(range(0, N, batch_size), desc="Processing batches"):            
+            img0 = left_all[i:i+batch_size]
+            img1 = right_all[i:i+batch_size]
             img0 = torch.as_tensor(img0).cuda().float().permute(0,3,1,2)
             img1 = torch.as_tensor(img1).cuda().float().permute(0,3,1,2)
 
@@ -490,10 +488,10 @@ def batched_stereo_inference(model, left_h5_file, right_h5_file, output_h5_file,
     disp_all = np.concatenate(disp_all, axis=0).reshape(N,H,W).astype(np.float16)
     depth_all = np.concatenate(depth_all, axis=0).reshape(N,H,W).astype(np.float16)
 
-    with h5py.File(f'{args.out_dir}/leftview_disp_depth.h5', 'w') as f:
+    with h5py.File(f'{out_dir}/leftview_disp_depth.h5', 'w') as f:
       f.create_dataset('disp', data=disp_all, compression='gzip')
       f.create_dataset('depth', data=depth_all, compression='gzip')      
-    print(f"Saved results to {output_h5_file}")
+    print(f"Saved results to {out_dir}")
     return 
 
 if __name__ == '__main__':
@@ -591,7 +589,7 @@ if __name__ == '__main__':
             model=model,
             left_h5_file=args.left_h5_file,
             right_h5_file=args.right_h5_file,
-            output_h5_file=args.output_h5_file,
+            out_dir=args.out_dir,
             stereo_params_npz_file=args.stereo_params_npz_file,
             iters=args.valid_iters,
             mixed_prec=use_mixed_precision,
