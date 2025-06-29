@@ -296,7 +296,7 @@ class Monster(nn.Module):
         updated_state_dict_dpt = {}
         for key in state_dict_dpt:
             if 'defomencoder.depth_anything.' in key:
-                updated_state_dict_dpt[key] = state_dict_dpt[key.replace('defomencoder.depth_anything.','')]
+                updated_state_dict_dpt[key.replace('defomencoder.depth_anything.','')] = state_dict_dpt[key]
 
         # f'/content/models/depth_anything_v2_vitl.pth'
         # state_dict_dpt = torch.load(f'/home/cjd/cvpr2025/fusion/Depth-Anything-V2-list3/depth_anything_v2_{args.encoder}.pth', map_location='cpu')
