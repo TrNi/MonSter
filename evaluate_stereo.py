@@ -465,7 +465,7 @@ def batched_stereo_inference(model, left_h5_file, right_h5_file, out_dir, stereo
 
             
             with autocast("cuda", enabled=mixed_prec):
-                flow_pr = model(image1, image2, iters=iters, test_mode=True)
+                flow_pr = model(img0, img1, iters=iters, test_mode=True)
             
             # Handle different model outputs
             if isinstance(flow_pr, (list, tuple)):
