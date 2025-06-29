@@ -547,7 +547,7 @@ if __name__ == '__main__':
         logging.info("Loading checkpoint...")
         logging.info(args.restore_ckpt)
         assert os.path.exists(args.restore_ckpt)
-        checkpoint = torch.load(args.restore_ckpt)
+        checkpoint = torch.load(args.restore_ckpt, weights_only=True)
         ckpt = dict()
         if 'state_dict' in checkpoint.keys():
             checkpoint = checkpoint['state_dict']
@@ -558,7 +558,7 @@ if __name__ == '__main__':
             else:
                 ckpt["module." + key] = checkpoint[key]  # 添加 "module."
 
-        model.load_state_dict(ckpt, strict=True, weights_only=True)
+        model.load_state_dict(ckpt, strict=True) # , weights_only=True)
 
         logging.info(f"Done loading checkpoint")
 
