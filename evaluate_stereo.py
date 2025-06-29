@@ -63,7 +63,7 @@ def validate_eth3d(model, iters=32, mixed_prec=False):
         padder = InputPadder(image1.shape, divis_by=32)
         image1, image2 = padder.pad(image1, image2)
         with torch.no_grad():
-            with autocast(enabled=mixed_prec):
+            with autocast("cuda", enabled=mixed_prec):
                 flow_pr = model(image1, image2, iters=iters, test_mode=True)
 
         flow_pr = padder.unpad(flow_pr.float()).cpu().squeeze(0)
@@ -114,7 +114,7 @@ def validate_kitti(model, iters=32, mixed_prec=False):
         image1, image2 = padder.pad(image1, image2)
 
         with torch.no_grad():
-            with autocast(enabled=mixed_prec):
+            with autocast("cuda", enabled=mixed_prec):
                 start = time.time()
                 flow_pr = model(image1, image2, iters=iters, test_mode=True)
                 end = time.time()
@@ -170,7 +170,7 @@ def validate_vkitti(model, iters=32, mixed_prec=False):
         padder = InputPadder(image1.shape, divis_by=32)
         image1, image2 = padder.pad(image1, image2)
 
-        with autocast(enabled=mixed_prec):
+        with autocast("cuda", enabled=mixed_prec):
             start = time.time()
             flow_pr = model(image1, image2, iters=iters, test_mode=True)
             end = time.time()
@@ -228,7 +228,7 @@ def validate_sceneflow(model, iters=32, mixed_prec=False):
         padder = InputPadder(image1.shape, divis_by=32)
         image1, image2 = padder.pad(image1, image2)
 
-        with autocast(enabled=mixed_prec):
+        with autocast("cuda", enabled=mixed_prec):
             start = time.time()
             flow_pr = model(image1, image2, iters=iters, test_mode=True)
             end = time.time()
@@ -351,7 +351,7 @@ def validate_middlebury(model, iters=32, split='F', mixed_prec=False):
         padder = InputPadder(image1.shape, divis_by=32)
         image1, image2 = padder.pad(image1, image2)
 
-        with autocast(enabled=mixed_prec):
+        with autocast("cuda", enabled=mixed_prec):
             flow_pr = model(image1, image2, iters=iters, test_mode=True)
         flow_pr = padder.unpad(flow_pr).cpu().squeeze(0)
         a = input('input something')
@@ -403,51 +403,77 @@ def batched_stereo_inference(model, left_h5_file, right_h5_file, output_h5_file,
     """
     model.eval()
     
-    # Load stereo parameters
-    stereo_params = np.load(stereo_params_npz_file, allow_pickle=True)
+    stereo_params = np.load(args.stereo_params_npz_file, allow_pickle=True)
     P1 = stereo_params['P1']
-    f_left = P1[0, 0]
+    #P1[:2] *= args.scale
+    f_left = P1[0,0]
     baseline = stereo_params['baseline']
+
+    out_dir = Path(args.out_dir)
+    os.makedirs(out_dir, exist_ok=True)       
     
-    with h5py.File(left_h5_file, 'r') as f_left, \
-         h5py.File(right_h5_file, 'r') as f_right, \
-         h5py.File(output_h5_file, 'w') as f_out:
+    if args.left_h5_file and args.right_h5_file:
+      with h5py.File(args.left_h5_file, 'r') as f:
+        left_all = f['left'][()]   # or np.array(f['left'])
+      with h5py.File(args.right_h5_file, 'r') as f:
+        right_all = f['right'][()]
+      print(left_all.shape, right_all.shape)
+    
+    if left_all.ndim==3:
+      left_all = left_all[None]
+      right_all = right_all[None]
+    
+    N,H,W,C = left_all.shape
+    print(f"Found {N} images. Saving files to {out_dir}.")
+    disp_all = []
+    depth_all = []
+
+    
+    
+    # with h5py.File(left_h5_file, 'r') as f_left, \
+    #      h5py.File(right_h5_file, 'r') as f_right, \
+    #      h5py.File(output_h5_file, 'w') as f_out:        
+    #     left_data = f_left['left']
+    #     right_data = f_right['right']
+    #     N = left_data.shape[0]
+    #     H, W = left_data.shape[1:3]        
+    #     # Create output datasets
+    #     disp_dset = f_out.create_dataset('disp', (N, H, W), 
+    #                                    dtype='float16', compression='gzip')
+    #     depth_dset = f_out.create_dataset('depth', (N, H, W), 
+    #                                      dtype='float16', compression='gzip')
         
-        left_data = f_left['left']
-        right_data = f_right['right']
-        N = left_data.shape[0]
-        H, W = left_data.shape[1:3]
-        
-        # Create output datasets
-        disp_dset = f_out.create_dataset('disp', (N, H, W), 
-                                       dtype='float16', compression='gzip')
-        depth_dset = f_out.create_dataset('depth', (N, H, W), 
-                                        dtype='float16', compression='gzip')
-        
-        # Process in batches
-        for i in tqdm(range(0, N, batch_size), desc="Processing batches"):
-            batch_size = min(batch_size, N - i)
+    # Process in batches
+    with torch.no_grad():
+        for i in tqdm(range(0, N, args.batch_size), desc="Processing batches"):            
+            img0 = left_all[i:i+args.batch_size]
+            img1 = right_all[i:i+args.batch_size]
+            img0 = torch.as_tensor(img0).cuda().float().permute(0,3,1,2)
+            img1 = torch.as_tensor(img1).cuda().float().permute(0,3,1,2)
+
+            padder = InputPadder(img0.shape, divis_by=32)
+            img0, img1 = padder.pad(img0, img1)
             
             # Load batch
-            left_batch = left_data[i:i+batch_size]
-            right_batch = right_data[i:i+batch_size]
+            # left_batch = left_data[i:i+batch_size]
+            # right_batch = right_data[i:i+batch_size]
             
-            # Convert to tensor and process
-            image1 = torch.from_numpy(left_batch).permute(0, 3, 1, 2).float().cuda()
-            image2 = torch.from_numpy(right_batch).permute(0, 3, 1, 2).float().cuda()
+            # # Convert to tensor and process
+            # image1 = torch.from_numpy(left_batch).permute(0, 3, 1, 2).float().cuda()
+            # image2 = torch.from_numpy(right_batch).permute(0, 3, 1, 2).float().cuda()
             
-            padder = InputPadder(image1.shape, divis_by=32)
-            image1, image2 = padder.pad(image1, image2)
+            # padder = InputPadder(image1.shape, divis_by=32)
+            # image1, image2 = padder.pad(image1, image2)
 
-            with torch.no_grad():
-                with autocast(enabled=mixed_prec):
-                    flow_pr = model(image1, image2, iters=iters, test_mode=True)
-                
-                # Handle different model outputs
-                if isinstance(flow_pr, (list, tuple)):
-                    flow_pr = flow_pr[-1]  # Take the last output if model returns multiple
-                
-                flow_pr = padder.unpad(flow_pr).cpu().numpy()
+            
+            with autocast("cuda", enabled=mixed_prec):
+                flow_pr = model(image1, image2, iters=iters, test_mode=True)
+            
+            # Handle different model outputs
+            if isinstance(flow_pr, (list, tuple)):
+                flow_pr = flow_pr[-1]  # Take the last output if model returns multiple
+            
+            flow_pr = padder.unpad(flow_pr).cpu().numpy()
             
             # Convert flow to disparity (assuming horizontal flow)
             disp = flow_pr[:, 0, :, :]  # Take x-component of flow as disparity
@@ -456,21 +482,37 @@ def batched_stereo_inference(model, left_h5_file, right_h5_file, output_h5_file,
             depth = f_left * baseline / (np.abs(disp) + 1e-6)
             
             # Save results
-            disp_dset[i:i+batch_size] = disp.astype('float16')
-            depth_dset[i:i+batch_size] = depth.astype('float16')
-    
+            disp_all.append(disp)
+            depth_all.append(depth)
+            # disp_[i:i+batch_size] = disp.astype('float16')
+            # depth_dset[i:i+batch_size] = depth.astype('float16')
+
+    disp_all = np.concatenate(disp_all, axis=0).reshape(N,H,W).astype(np.float16)
+    depth_all = np.concatenate(depth_all, axis=0).reshape(N,H,W).astype(np.float16)
+
+    with h5py.File(f'{args.out_dir}/leftview_disp_depth.h5', 'w') as f:
+      f.create_dataset('disp', data=disp_all, compression='gzip')
+      f.create_dataset('depth', data=depth_all, compression='gzip')      
     print(f"Saved results to {output_h5_file}")
-    return output_h5_file
+    return 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--restore_ckpt', help="restore checkpoint", default="/data2/cjd/mono_fusion/checkpoints/sceneflow.pth")
-    parser.add_argument('--left_h5', type=str, help='Path to HDF5 file with left images (dataset: left)')
-    parser.add_argument('--right_h5', type=str, help='Path to HDF5 file with right images (dataset: right)')
-    parser.add_argument('--output_h5', type=str, help='Path to save output HDF5 file')
-    parser.add_argument('--stereo_params', type=str, help='Path to stereo parameters .npz file')
-
-    parser.add_argument('--dataset', help="dataset for evaluation", default='sceneflow', choices=["eth3d", "kitti", "sceneflow", "vkitti", "driving", "npy_arrays"] + [f"middlebury_{s}" for s in 'FHQ'])
+    parser.add_argument('--batch_size', default=5, type=int)    
+    parser.add_argument('--left_h5_file', default="", type=str)
+    parser.add_argument('--right_h5_file', default="", type=str)
+    parser.add_argument('--stereo_params_npz_file', default = "", type = str)    
+    parser.add_argument('--restore_ckpt', help="restore checkpoint", required=True)
+    parser.add_argument('--out_dir', default=f'../output/', type=str, help='the directory to save results')
+    parser.add_argument('--save_numpy', action='store_true', help='save output as numpy arrays', default=True)
+    parser.add_argument('--dav2_path', type=str, default="/data2/cjd/mono_fusion/checkpoints/depth_anything_v2_vitl.pth")
+    # parser.add_argument('--batch_size', type=int, default=4, help='Batch size for inference')    
+    #parser.add_argument('--restore_ckpt', help="restore checkpoint", default="/data2/cjd/mono_fusion/checkpoints/sceneflow.pth")
+    # parser.add_argument('--left_h5', type=str, help='Path to HDF5 file with left images (dataset: left)')
+    # parser.add_argument('--right_h5', type=str, help='Path to HDF5 file with right images (dataset: right)')
+    # parser.add_argument('--output_h5', type=str, help='Path to save output HDF5 file')
+    # parser.add_argument('--stereo_params', type=str, help='Path to stereo parameters .npz file')
+    parser.add_argument('--dataset', help="dataset for evaluation", default='h5_arrays', choices=["eth3d", "kitti", "sceneflow", "vkitti", "driving", "h5_arrays"] + [f"middlebury_{s}" for s in 'FHQ'])
     parser.add_argument('--mixed_precision', default=False, action='store_true', help='use mixed precision')
     parser.add_argument('--valid_iters', type=int, default=32, help='number of flow-field updates during forward pass')
 
@@ -485,7 +527,7 @@ if __name__ == '__main__':
     parser.add_argument('--slow_fast_gru', action='store_true', help="iterate the low-res GRUs more frequently")
     parser.add_argument('--n_gru_layers', type=int, default=3, help="number of hidden GRU levels")
     parser.add_argument('--max_disp', type=int, default=192, help="max disp of geometry encoding volume")
-    parser.add_argument('--batch_size', type=int, default=4, help='Batch size for inference')
+    
     
     args = parser.parse_args()
 
@@ -544,7 +586,7 @@ if __name__ == '__main__':
     elif args.dataset == 'driving':
         validate_driving(model, iters=args.valid_iters, mixed_prec=use_mixed_precision)
 
-    elif args.dataset == 'npy_arrays':
+    elif args.dataset == 'h5_arrays':
         batched_stereo_inference(
             model=model,
             left_h5_file=args.left_h5,
