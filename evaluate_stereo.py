@@ -13,7 +13,18 @@ from core.monster import Monster, autocast
 import core.stereo_datasets as datasets
 from core.utils.utils import InputPadder
 from PIL import Image
+import cv2
 # import torch.nn.functional as F
+
+def resize_image(img_hwc, target_h, target_w, interpolation=cv2.INTER_LINEAR):
+    # img_chw: H x W x C numpy array    
+    resized_hwc = cv2.resize(img_hwc, (target_w, target_h), interpolation=interpolation)
+    
+    return resized_hwc
+
+def resize_batch(batch_nhwc, target_h, target_w, interpolation=cv2.INTER_LINEAR):
+    return np.stack([resize_image(img, target_h, target_w, interpolation) for img in batch_nhwc])
+
 
 class NormalizeTensor(object):
     """Normalize a tensor by given mean and std."""
@@ -413,17 +424,25 @@ def batched_stereo_inference(model, left_h5_file, right_h5_file, out_dir, stereo
     os.makedirs(out_dir, exist_ok=True)       
     
     if left_h5_file and right_h5_file:
-      with h5py.File(left_h5_file, 'r') as f:
-        left_all = f['left'][()]   # or np.array(f['left'])
-      with h5py.File(right_h5_file, 'r') as f:
-        right_all = f['right'][()]
-      print(left_all.shape, right_all.shape)
+        try:
+            with h5py.File(left_h5_file, 'r') as f:
+                left_all = f['data'][()]   # or np.array(f['left'])
+            with h5py.File(right_h5_file, 'r') as f:
+                right_all = f['data'][()]
+        except Exception as e:            
+            with h5py.File(left_h5_file, 'r') as f:
+                left_all = f['left'][()]   # or np.array(f['left'])
+            with h5py.File(right_h5_file, 'r') as f:
+                right_all = f['right'][()]
+      
+        print(left_all.shape, right_all.shape)
     
     if left_all.ndim==3:
-      left_all = left_all[None]
-      right_all = right_all[None]
+        left_all = left_all[None]
+        right_all = right_all[None]
     
     N,H,W,C = left_all.shape
+    resize_factor = 1.5
     print(f"Found {N} images. Saving files to {out_dir}.")
     disp_all = []
     depth_all = []    
@@ -440,18 +459,31 @@ def batched_stereo_inference(model, left_h5_file, right_h5_file, out_dir, stereo
     #                                    dtype='float16', compression='gzip')
     #     depth_dset = f_out.create_dataset('depth', (N, H, W), 
     #                                      dtype='float16', compression='gzip')
-        
+    torch.backends.cuda.preferred_linalg_library(backend= "magma")    
     # Process in batches
     with torch.no_grad():
         for i in tqdm(range(0, N, batch_size), desc="Processing batches"):            
             img0 = left_all[i:i+batch_size]
             img1 = right_all[i:i+batch_size]
+
+            if len(img0.shape)==3:
+                img0 = img0[None,...]
+
+            if len(img1.shape)==3:
+                img1 = img1[None,...]
+
+            # image size of about 1500x2300 works with batch_size of 1, 
+            # with resize_factor of 1.5 at 28s/image, up to ~25 images.
+
+            img0 = resize_batch(img0, round(H/resize_factor) ,round(W/resize_factor))
+            img1 = resize_batch(img1, round(H/resize_factor), round(W/resize_factor))
+
             img0 = torch.as_tensor(img0).cuda().float().permute(0,3,1,2)
             img1 = torch.as_tensor(img1).cuda().float().permute(0,3,1,2)
 
             padder = InputPadder(img0.shape, divis_by=32)
-            img0, img1 = padder.pad(img0, img1)
-            
+            img0, img1 = padder.pad(img0, img1)            
+            print(img0.shape, img1.shape)
             # Load batch
             # left_batch = left_data[i:i+batch_size]
             # right_batch = right_data[i:i+batch_size]
@@ -485,8 +517,8 @@ def batched_stereo_inference(model, left_h5_file, right_h5_file, out_dir, stereo
             # disp_[i:i+batch_size] = disp.astype('float16')
             # depth_dset[i:i+batch_size] = depth.astype('float16')
 
-    disp_all = np.concatenate(disp_all, axis=0).reshape(N,H,W).astype(np.float16)
-    depth_all = np.concatenate(depth_all, axis=0).reshape(N,H,W).astype(np.float16)
+    disp_all = np.concatenate(disp_all, axis=0).reshape(N,round(H/resize_factor),round(W/resize_factor)).astype(np.float16)
+    depth_all = np.concatenate(depth_all, axis=0).reshape(N,round(H/resize_factor),round(W/resize_factor)).astype(np.float16)
 
     with h5py.File(f'{out_dir}/leftview_disp_depth.h5', 'w') as f:
       f.create_dataset('disp', data=disp_all, compression='gzip')
