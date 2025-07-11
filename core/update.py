@@ -74,7 +74,7 @@ def interp(x, dest):
     original_dtype = x.dtype
     x_fp32 = x.float()
     interp_args = {'mode': 'bilinear', 'align_corners': True}
-    with torch.cuda.amp.autocast(enabled=False):
+    with torch.amp.autocast("cuda",enabled=False):
         output_fp32 = F.interpolate(x_fp32, dest.shape[2:], **interp_args)
     if original_dtype != torch.float32:
         output = output_fp32.to(original_dtype)

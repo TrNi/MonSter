@@ -397,13 +397,13 @@ def validate_middlebury(model, iters=32, split='F', mixed_prec=False):
 import h5py
 
 @torch.no_grad()
-def batched_stereo_inference(model, left_h5_file, right_h5_file, out_dir, stereo_params_npz_file, 
+def batched_stereo_inference(args, left_h5_file, right_h5_file, out_dir, stereo_params_npz_file, 
                            iters=32, mixed_prec=False, batch_size=4):
     """
     Load batched left/right stereo images from HDF5 files, perform inference, and save the output.
     
     Parameters:
-        model: Model accepting batched input (N,C,H,W) and returning (N,2,H,W) flow.
+        args: arguments for the model.
         left_h5_file (str): Path to HDF5 file with left images (dataset: left).
         right_h5_file (str): Path to HDF5 file with right images (dataset: right).
         output_h5_file (str): Path to save output HDF5 file.
@@ -412,7 +412,8 @@ def batched_stereo_inference(model, left_h5_file, right_h5_file, out_dir, stereo
         mixed_prec (bool): Whether to use AMP.
         batch_size (int): Number of images to process in each batch.
     """
-    model.eval()
+   
+    
     
     stereo_params = np.load(stereo_params_npz_file, allow_pickle=True)
     P1 = stereo_params['P1']
@@ -441,24 +442,53 @@ def batched_stereo_inference(model, left_h5_file, right_h5_file, out_dir, stereo
         left_all = left_all[None]
         right_all = right_all[None]
     
-    N,H,W,C = left_all.shape
+    N,C,H,W = left_all.shape
     resize_factor = 1.5
     print(f"Found {N} images. Saving files to {out_dir}.")
+    args.max_disp =  max(np.ceil(W/resize_factor/4).astype(int), args.max_disp)
+
+    model = torch.nn.DataParallel(Monster(args), device_ids=[0])
+
+    total_params = sum(p.numel() for p in model.parameters()) / 1e6
+    print(f"Total number of parameters: {total_params:.2f}M")
+
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
+    print(f"Total number of trainable parameters: {trainable_params:.2f}M")
+
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s')
+
+    if args.restore_ckpt is not None:
+        assert args.restore_ckpt.endswith(".pth")
+        logging.info("Loading checkpoint...")
+        logging.info(args.restore_ckpt)
+        assert os.path.exists(args.restore_ckpt)
+        checkpoint = torch.load(args.restore_ckpt, weights_only=True)
+        ckpt = dict()
+        if 'state_dict' in checkpoint.keys():
+            checkpoint = checkpoint['state_dict']
+        for key in checkpoint:
+            # ckpt['module.' + key] = checkpoint[key]
+            if key.startswith("module."):
+                ckpt[key] = checkpoint[key]  # 保持原样
+            else:
+                ckpt["module." + key] = checkpoint[key]  # 添加 "module."
+
+        model.load_state_dict(ckpt, strict=True) # , weights_only=True)
+
+        logging.info(f"Done loading checkpoint")
+
+    model.cuda()
+    model.eval()
+
+    print(f"The model has {format(count_parameters(model)/1e6, '.2f')}M learnable parameters.")
+
+
+
+
     disp_all = []
     depth_all = []    
-    
-    # with h5py.File(left_h5_file, 'r') as f_left, \
-    #      h5py.File(right_h5_file, 'r') as f_right, \
-    #      h5py.File(output_h5_file, 'w') as f_out:        
-    #     left_data = f_left['left']
-    #     right_data = f_right['right']
-    #     N = left_data.shape[0]
-    #     H, W = left_data.shape[1:3]        
-    #     # Create output datasets
-    #     disp_dset = f_out.create_dataset('disp', (N, H, W), 
-    #                                    dtype='float16', compression='gzip')
-    #     depth_dset = f_out.create_dataset('depth', (N, H, W), 
-    #                                      dtype='float16', compression='gzip')
+
     torch.backends.cuda.preferred_linalg_library(backend= "magma")    
     # Process in batches
     with torch.no_grad():
@@ -478,8 +508,8 @@ def batched_stereo_inference(model, left_h5_file, right_h5_file, out_dir, stereo
             img0 = resize_batch(img0, round(H/resize_factor) ,round(W/resize_factor))
             img1 = resize_batch(img1, round(H/resize_factor), round(W/resize_factor))
 
-            img0 = torch.as_tensor(img0).cuda().float().permute(0,3,1,2)
-            img1 = torch.as_tensor(img1).cuda().float().permute(0,3,1,2)
+            img0 = torch.as_tensor(img0).cuda().float()
+            img1 = torch.as_tensor(img1).cuda().float()
 
             padder = InputPadder(img0.shape, divis_by=32)
             img0, img1 = padder.pad(img0, img1)            
@@ -561,41 +591,7 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
 
-    model = torch.nn.DataParallel(Monster(args), device_ids=[0])
-
-    total_params = sum(p.numel() for p in model.parameters()) / 1e6
-    print(f"Total number of parameters: {total_params:.2f}M")
-
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
-    print(f"Total number of trainable parameters: {trainable_params:.2f}M")
-
-    logging.basicConfig(level=logging.INFO,
-                        format='%(asctime)s %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s')
-
-    if args.restore_ckpt is not None:
-        assert args.restore_ckpt.endswith(".pth")
-        logging.info("Loading checkpoint...")
-        logging.info(args.restore_ckpt)
-        assert os.path.exists(args.restore_ckpt)
-        checkpoint = torch.load(args.restore_ckpt, weights_only=True)
-        ckpt = dict()
-        if 'state_dict' in checkpoint.keys():
-            checkpoint = checkpoint['state_dict']
-        for key in checkpoint:
-            # ckpt['module.' + key] = checkpoint[key]
-            if key.startswith("module."):
-                ckpt[key] = checkpoint[key]  # 保持原样
-            else:
-                ckpt["module." + key] = checkpoint[key]  # 添加 "module."
-
-        model.load_state_dict(ckpt, strict=True) # , weights_only=True)
-
-        logging.info(f"Done loading checkpoint")
-
-    model.cuda()
-    model.eval()
-
-    print(f"The model has {format(count_parameters(model)/1e6, '.2f')}M learnable parameters.")
+    model = nn.Identity()
     use_mixed_precision = args.corr_implementation.endswith("_cuda")
 
     if args.dataset == 'eth3d':
@@ -618,7 +614,7 @@ if __name__ == '__main__':
 
     elif args.dataset == 'h5_arrays':
         batched_stereo_inference(
-            model=model,
+            args,
             left_h5_file=args.left_h5_file,
             right_h5_file=args.right_h5_file,
             out_dir=args.out_dir,

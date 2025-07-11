@@ -6,7 +6,7 @@ from core.geometry import Combined_Geo_Encoding_Volume
 from core.submodule import *
 from core.refinement import REMP
 from core.warp import disp_warp
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 try:
     autocast = torch.amp.autocast
