@@ -27,6 +27,17 @@ def resize_image(img_chw, target_h, target_w, interpolation=cv2.INTER_LINEAR):
 def resize_batch(batch_nchw, target_h, target_w, interpolation=cv2.INTER_LINEAR):
     return np.stack([resize_image(img, target_h, target_w, interpolation) for img in batch_nchw])
 
+def pad_to_even_multiple(x, n=8):
+    """Pad tensor on the right/bottom so H and W are multiples of *n* and even."""
+    _, _, h, w = x.shape
+    h_pad = (-h) % n
+    w_pad = (-w) % n
+    # make them even to avoid odd-sized upsampling results
+    if (h + h_pad) % 2:
+        h_pad += n
+    if (w + w_pad) % 2:
+        w_pad += n
+    return F.pad(x, (0, w_pad, 0, h_pad)), (h_pad, w_pad)
 
 class NormalizeTensor(object):
     """Normalize a tensor by given mean and std."""
@@ -485,9 +496,6 @@ def batched_stereo_inference(args, left_h5_file, right_h5_file, out_dir, stereo_
 
     print(f"The model has {format(count_parameters(model)/1e6, '.2f')}M learnable parameters.")
 
-
-
-
     disp_all = []
     depth_all = []    
 
@@ -515,7 +523,11 @@ def batched_stereo_inference(args, left_h5_file, right_h5_file, out_dir, stereo_
 
             padder = InputPadder(img0.shape, divis_by=32)
             img0, img1 = padder.pad(img0, img1)            
+            img0, pad_hw = pad_to_even_multiple(img0, 8)
+            img1, _      = pad_to_even_multiple(img1, 8)
+
             print(img0.shape, img1.shape)
+
             # Load batch
             # left_batch = left_data[i:i+batch_size]
             # right_batch = right_data[i:i+batch_size]
