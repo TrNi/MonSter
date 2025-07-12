@@ -16,14 +16,16 @@ from PIL import Image
 import cv2
 # import torch.nn.functional as F
 
-def resize_image(img_hwc, target_h, target_w, interpolation=cv2.INTER_LINEAR):
-    # img_chw: H x W x C numpy array    
+def resize_image(img_chw, target_h, target_w, interpolation=cv2.INTER_LINEAR):
+    # img_chw: C x H x W numpy array    
+    img_hwc = np.transpose(img_chw, (1, 2, 0))
     resized_hwc = cv2.resize(img_hwc, (target_w, target_h), interpolation=interpolation)
+    resized_chw = np.transpose(resized_hwc, (2, 0, 1))
     
-    return resized_hwc
+    return resized_chw
 
-def resize_batch(batch_nhwc, target_h, target_w, interpolation=cv2.INTER_LINEAR):
-    return np.stack([resize_image(img, target_h, target_w, interpolation) for img in batch_nhwc])
+def resize_batch(batch_nchw, target_h, target_w, interpolation=cv2.INTER_LINEAR):
+    return np.stack([resize_image(img, target_h, target_w, interpolation) for img in batch_nchw])
 
 
 class NormalizeTensor(object):
