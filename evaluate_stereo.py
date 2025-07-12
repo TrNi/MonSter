@@ -456,6 +456,11 @@ def batched_stereo_inference(args, left_h5_file, right_h5_file, out_dir, stereo_
         right_all = right_all[None]
     
     N,C,H,W = left_all.shape
+    if args.process_only:
+        N_stop = args.process_only
+    else:
+        N_stop = N
+
     resize_factor = 1.5
     print(f"Found {N} images. Saving files to {out_dir}.")
     args.max_disp =  max(np.ceil(W/resize_factor/4).astype(int), args.max_disp)
@@ -560,6 +565,8 @@ def batched_stereo_inference(args, left_h5_file, right_h5_file, out_dir, stereo_
             depth_all.append(depth)
             # disp_[i:i+batch_size] = disp.astype('float16')
             # depth_dset[i:i+batch_size] = depth.astype('float16')
+            if i+batch_size >= N_stop:
+                break
 
     disp_all = np.concatenate(disp_all, axis=0).reshape(N,round(H/resize_factor),round(W/resize_factor)).astype(np.float16)
     depth_all = np.concatenate(depth_all, axis=0).reshape(N,round(H/resize_factor),round(W/resize_factor)).astype(np.float16)
@@ -601,6 +608,7 @@ if __name__ == '__main__':
     parser.add_argument('--slow_fast_gru', action='store_true', help="iterate the low-res GRUs more frequently")
     parser.add_argument('--n_gru_layers', type=int, default=3, help="number of hidden GRU levels")
     parser.add_argument('--max_disp', type=int, default=192, help="max disp of geometry encoding volume")
+    parser.add_argument("--process_only",default=None,type=int)
     
     
     args = parser.parse_args()

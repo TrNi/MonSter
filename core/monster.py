@@ -122,6 +122,7 @@ class hourglass(nn.Module):
         conv2 = self.feature_att_up_16(conv2, features[2])
 
         conv2_up = self.conv2_up(conv2)
+        print('conv2_up', conv2_up.shape, 'conv1', conv1.shape)
         conv1 = torch.cat((conv2_up, conv1), dim=1)
         conv1 = self.agg_1(conv1)
         conv1 = self.feature_att_up_8(conv1, features[1])
