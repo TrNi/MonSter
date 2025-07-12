@@ -14,7 +14,7 @@ import core.stereo_datasets as datasets
 from core.utils.utils import InputPadder
 from PIL import Image
 import cv2
-# import torch.nn.functional as F
+import torch.nn.functional as F
 
 def resize_image(img_chw, target_h, target_w, interpolation=cv2.INTER_LINEAR):
     # img_chw: C x H x W numpy array    
