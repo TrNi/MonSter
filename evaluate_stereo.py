@@ -27,7 +27,7 @@ def resize_image(img_chw, target_h, target_w, interpolation=cv2.INTER_LINEAR):
 def resize_batch(batch_nchw, target_h, target_w, interpolation=cv2.INTER_LINEAR):
     return np.stack([resize_image(img, target_h, target_w, interpolation) for img in batch_nchw])
 
-def pad_to_even_multiple(x, n=8):
+def pad_to_even_multiple(x, n=32):
     """Pad tensor on the right/bottom so H and W are multiples of *n* and even."""
     _, _, h, w = x.shape
     h_pad = (-h) % n
