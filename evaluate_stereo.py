@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from core.monster import Monster, autocast
-
+from torch import nn
 import core.stereo_datasets as datasets
 from core.utils.utils import InputPadder
 from PIL import Image
