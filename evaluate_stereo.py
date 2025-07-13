@@ -565,16 +565,16 @@ def batched_stereo_inference(args, left_h5_file, right_h5_file, out_dir, stereo_
             depth_all.append(depth)
             # disp_[i:i+batch_size] = disp.astype('float16')
             # depth_dset[i:i+batch_size] = depth.astype('float16')
-            if i+batch_size >= N_stop:
+            if i+args.batch_size >= N_stop:
                 break
 
     disp_all = np.concatenate(disp_all, axis=0).reshape(N,round(H/resize_factor),round(W/resize_factor)).astype(np.float16)
     depth_all = np.concatenate(depth_all, axis=0).reshape(N,round(H/resize_factor),round(W/resize_factor)).astype(np.float16)
 
-    with h5py.File(f'{out_dir}/leftview_disp_depth.h5', 'w') as f:
+    with h5py.File(f'{args.out_dir}/leftview_disp_depth.h5', 'w') as f:
       f.create_dataset('disp', data=disp_all, compression='gzip')
       f.create_dataset('depth', data=depth_all, compression='gzip')      
-    print(f"Saved results to {out_dir}")
+    print(f"Saved results to {args.out_dir}")
     return 
 
 if __name__ == '__main__':
