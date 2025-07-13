@@ -395,10 +395,15 @@ class Monster(nn.Module):
 
         match_left = self.desc(self.conv(features_left[0]))
         match_right = self.desc(self.conv(features_right[0]))
+        print("max_disp//4", self.args.max_disp//4)
         gwc_volume = build_gwc_volume(match_left, match_right, self.args.max_disp//4, 8)
+        print("gwc_volume", gwc_volume.shape)
         gwc_volume = self.corr_stem(gwc_volume)
+        print("gwc_volume", gwc_volume.shape)
         gwc_volume = self.corr_feature_att(gwc_volume, features_left[0])
+        print("gwc_volume", gwc_volume.shape)
         geo_encoding_volume = self.cost_agg(gwc_volume, features_left)
+        print("geo_encoding_volume", geo_encoding_volume.shape)
 
         # Init disp from geometry encoding volume
         prob = F.softmax(self.classifier(geo_encoding_volume).squeeze(1), dim=1)
