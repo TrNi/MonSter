@@ -107,19 +107,30 @@ class hourglass(nn.Module):
         self.feature_att_up_8 = FeatureAtt(in_channels*2, 64)
 
     def forward(self, x, features):
+        print("x", x.shape)
         conv1 = self.conv1(x)
+        print("conv1", conv1.shape)
         conv1 = self.feature_att_8(conv1, features[1])
+        print("conv1", conv1.shape)
 
         conv2 = self.conv2(conv1)
+        print("conv2", conv2.shape)
         conv2 = self.feature_att_16(conv2, features[2])
+        print("conv2", conv2.shape)
 
         conv3 = self.conv3(conv2)
+        print("conv3", conv3.shape)
         conv3 = self.feature_att_32(conv3, features[3])
+        print("conv3", conv3.shape)
 
         conv3_up = self.conv3_up(conv3)
+        print("conv3_up", conv3_up.shape)
         conv2 = torch.cat((conv3_up, conv2), dim=1)
+        print("conv2", conv2.shape)
         conv2 = self.agg_0(conv2)
+        print("conv2", conv2.shape)
         conv2 = self.feature_att_up_16(conv2, features[2])
+        print("conv2", conv2.shape)
 
         conv2_up = self.conv2_up(conv2)
         print('conv2_up', conv2_up.shape, 'conv1', conv1.shape)
