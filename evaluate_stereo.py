@@ -463,8 +463,8 @@ def batched_stereo_inference(args, left_h5_file, right_h5_file, out_dir, stereo_
     N_max = N_stop
     resize_factor = 1.5
     print(f"Found {N} images. Saving files to {out_dir}.")
-    args.max_disp =  max(np.ceil(W/resize_factor/4).astype(int), args.max_disp)
-
+    args.max_disp = int(max(np.ceil(W/resize_factor/4).astype(int), args.max_disp))
+    print("args.max_disp", args.max_disp)
     model = torch.nn.DataParallel(Monster(args), device_ids=[0])
 
     total_params = sum(p.numel() for p in model.parameters()) / 1e6

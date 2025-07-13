@@ -233,6 +233,7 @@ class Monster(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
+        print("args.max_disp", args.max_disp)
         
         context_dims = args.hidden_dims
 
