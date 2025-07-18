@@ -468,7 +468,7 @@ def batched_stereo_inference(args, left_h5_file, right_h5_file, out_dir, stereo_
     large_dim = max(H,W)
 
     resize_factor = 1#max(round(small_dim/1586,1), round(large_dim/2379,1))
-    resize_factor = 1.2
+    resize_factor = 1.3
     print(f"Found {N} images,  applying resize_factor {resize_factor} Saving files to {out_dir}.")
     args.max_disp = int(np.ceil(W/resize_factor/4/64/3)*64*3)
     #print("args.max_disp", args.max_disp)
