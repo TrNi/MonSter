@@ -16,6 +16,67 @@ from PIL import Image
 import cv2
 import torch.nn.functional as F
 
+def read_h5_chunk(h5_file, dataset_name, start_idx, chunk_size=5):
+    """
+    Read a chunk of data from an HDF5 file.
+    
+    Args:
+        h5_file (str): Path to HDF5 file
+        dataset_name (str): Name of the dataset to read
+        start_idx (int): Starting index to read from
+        chunk_size (int): Maximum number of images to read (default: 5)
+    
+    Returns:
+        tuple: (data chunk, actual_size)
+            - data chunk: numpy array in NxCxHxW format
+            - actual_size: number of images actually read (may be less than chunk_size at end of file)
+    """
+    with h5py.File(h5_file, 'r') as f:
+        dataset = f[dataset_name]
+        try:
+            # Get the actual number of images we can read
+            total_images = dataset.shape[0]
+            actual_size = min(chunk_size, total_images - start_idx)
+            
+            if actual_size <= 0:
+                return None, 0
+                
+            # Read the chunk
+            chunk = dataset[start_idx:start_idx + actual_size]
+            return chunk, actual_size
+            
+        except IndexError:
+            return None, 0
+
+def write_h5_chunk(h5_file, dataset_name, data, start_idx, shape=None, dtype=np.float32):
+    """
+    Write a chunk of data to an HDF5 file with gzip compression.
+    
+    Args:
+        h5_file (str): Path to HDF5 file
+        dataset_name (str): Name of the dataset to write
+        data (numpy.ndarray): Data chunk in NxCxHxW format
+        start_idx (int): Starting index to write at
+        shape (tuple): Total shape of the dataset (N,C,H,W). Required only when creating new dataset
+        dtype: Data type for the dataset (default: np.float32)
+    """
+    with h5py.File(h5_file, 'a') as f:
+        if dataset_name not in f:
+            if shape is None:
+                raise ValueError("shape must be provided when creating a new dataset")
+            # Create dataset with gzip compression if it doesn't exist
+            f.create_dataset(dataset_name, 
+                           shape=shape,
+                           dtype=dtype,
+                           compression='gzip',
+                           compression_opts=4,
+                           chunks=True)  # Let h5py choose optimal chunk size
+        
+        # Write the chunk
+        dataset = f[dataset_name]
+        end_idx = start_idx + len(data)
+        dataset[start_idx:end_idx] = data
+
 def resize_image(img_chw, target_h, target_w, interpolation=cv2.INTER_LINEAR):
     # img_chw: C x H x W numpy array    
     img_hwc = np.transpose(img_chw, (1, 2, 0))
@@ -425,8 +486,6 @@ def batched_stereo_inference(args, left_h5_file, right_h5_file, out_dir, stereo_
         mixed_prec (bool): Whether to use AMP.
         batch_size (int): Number of images to process in each batch.
     """
-   
-    
     
     stereo_params = np.load(stereo_params_npz_file, allow_pickle=True)
     P1 = stereo_params['P1']
@@ -435,43 +494,7 @@ def batched_stereo_inference(args, left_h5_file, right_h5_file, out_dir, stereo_
     baseline = stereo_params['baseline']
 
     #out_dir = Path(out_dir)
-    os.makedirs(out_dir, exist_ok=True)       
-    
-    if left_h5_file and right_h5_file:
-        try:
-            with h5py.File(left_h5_file, 'r') as f:
-                left_all = f['data'][()]   # or np.array(f['left'])
-            with h5py.File(right_h5_file, 'r') as f:
-                right_all = f['data'][()]
-        except Exception as e:            
-            with h5py.File(left_h5_file, 'r') as f:
-                left_all = f['left'][()]   # or np.array(f['left'])
-            with h5py.File(right_h5_file, 'r') as f:
-                right_all = f['right'][()]
-      
-        print(left_all.shape, right_all.shape)
-    
-    if left_all.ndim==3:
-        left_all = left_all[None]
-        right_all = right_all[None]
-    
-    N,C,H,W = left_all.shape
-    if args.process_only:
-        N_stop = args.process_only
-    else:
-        N_stop = N
-    N_max = N_stop
-    # aspect ratio for Canon EOS 6D is 3/2. 3648
-    # image size of about 1586x2379 works with batch_size of 1, 
-    # with resize_factor of 2.3 at 28s/image, up to ~25 images.
-    small_dim = min(H,W)
-    large_dim = max(H,W)
-
-    resize_factor = 1#max(round(small_dim/1586,1), round(large_dim/2379,1))
-    resize_factor = 1.5
-    print(f"Found {N} images,  applying resize_factor {resize_factor} Saving files to {out_dir}.")
-    args.max_disp = int(np.ceil(W/resize_factor/4/64/3)*64*3)
-    #print("args.max_disp", args.max_disp)
+    os.makedirs(out_dir, exist_ok=True)      
     model = torch.nn.DataParallel(Monster(args), device_ids=[0])
 
     total_params = sum(p.numel() for p in model.parameters()) / 1e6
@@ -503,85 +526,165 @@ def batched_stereo_inference(args, left_h5_file, right_h5_file, out_dir, stereo_
 
         logging.info(f"Done loading checkpoint")
 
-    model.cuda()
-    model.eval()
+        model.cuda()
+        model.eval()
+        torch.backends.cuda.preferred_linalg_library(backend= "magma")    
+        print(f"The model has {format(count_parameters(model)/1e6, '.2f')}M learnable parameters.") 
 
-    print(f"The model has {format(count_parameters(model)/1e6, '.2f')}M learnable parameters.")
-
-    disp_all = []
-    depth_all = []    
-
-    torch.backends.cuda.preferred_linalg_library(backend= "magma")    
-    # Process in batches
-    with torch.no_grad():
-        for i in tqdm(range(0, N, batch_size), desc="Processing batches"):            
-            img0 = left_all[i:i+batch_size]
-            img1 = right_all[i:i+batch_size]
-
-            if len(img0.shape)==3:
-                img0 = img0[None,...]
-
-            if len(img1.shape)==3:
-                img1 = img1[None,...]
-
-            # image size of about 1500x2300 works with batch_size of 1, 
-            # with resize_factor of 1.5 at 28s/image, up to ~25 images.
-
-            img0 = resize_batch(img0, round(H/resize_factor) ,round(W/resize_factor))
-            img1 = resize_batch(img1, round(H/resize_factor), round(W/resize_factor))
-
-            img0 = torch.as_tensor(img0).cuda().float()
-            img1 = torch.as_tensor(img1).cuda().float()
-
-            padder = InputPadder(img0.shape, divis_by=32)
-            img0, img1 = padder.pad(img0, img1)            
-            img0, pad_hw = pad_to_even_multiple(img0, 8)
-            img1, _      = pad_to_even_multiple(img1, 8)
-
-            print(img0.shape, img1.shape)
-
-            # Load batch
-            # left_batch = left_data[i:i+batch_size]
-            # right_batch = right_data[i:i+batch_size]
-            
-            # # Convert to tensor and process
-            # image1 = torch.from_numpy(left_batch).permute(0, 3, 1, 2).float().cuda()
-            # image2 = torch.from_numpy(right_batch).permute(0, 3, 1, 2).float().cuda()
-            
-            # padder = InputPadder(image1.shape, divis_by=32)
-            # image1, image2 = padder.pad(image1, image2)
-
-            
-            with autocast("cuda", enabled=mixed_prec):
-                flow_pr = model(img0, img1, iters=iters, test_mode=True)
-            
-            # Handle different model outputs
-            if isinstance(flow_pr, (list, tuple)):
-                flow_pr = flow_pr[-1]  # Take the last output if model returns multiple
-            
-            flow_pr = padder.unpad(flow_pr).cpu().numpy()
-            
-            # Convert flow to disparity (assuming horizontal flow)
-            disp = flow_pr[:, 0, :, :]  # Take x-component of flow as disparity
-            
-            # Calculate depth
-            depth = f_left * baseline / (np.abs(disp) + 1e-6)
-            
-            # Save results
-            disp_all.append(disp)
-            depth_all.append(depth)
-            # disp_[i:i+batch_size] = disp.astype('float16')
-            # depth_dset[i:i+batch_size] = depth.astype('float16')
-            if i+args.batch_size >= N_stop:
-                N_max = i + img0.shape[0]
+    prev_start_idx = 0
+    if args.left_h5_file and args.right_h5_file:
+        start_idx = 0
+        chunk_size = 5
+        while True:
+            prev_start_idx = start_idx
+            left_chunk, actual_left_size = read_h5_chunk(args.left_h5_file, 'rectified_lefts', start_idx, chunk_size)
+            right_chunk, actual_right_size = read_h5_chunk(args.right_h5_file, 'rectified_rights', start_idx, chunk_size)
+            assert actual_left_size == actual_right_size, f"left and right HDF5 chunks have different sizes: {actual_left_size} vs {actual_right_size}"
+            if actual_left_size == 0:
                 break
+            start_idx += actual_left_size
+            # try:
+            #     with h5py.File(args.left_h5_file, 'r') as f:
+            #         left_all = f['data'][()]   # or np.array(f['left'])
+            #     with h5py.File(args.right_h5_file, 'r') as f:
+            #         right_all = f['data'][()]
+            # except Exception as e:            
+            #     with h5py.File(args.left_h5_file, 'r') as f:
+            #         left_all = f['left'][()]   # or np.array(f['left'])
+            #     with h5py.File(args.right_h5_file, 'r') as f:
+            #         right_all = f['right'][()]      
+            print(left_chunk.shape, right_chunk.shape)
+    
+            if left_chunk.ndim==3:
+                left_chunk = left_chunk[None]
+                right_chunk = right_chunk[None]
+            
+            N,C,H,W = left_chunk.shape
+            if args.process_only:
+                N_stop = args.process_only
+            else:
+                N_stop = N
+            N_max = N_stop
+            # aspect ratio for Canon EOS 6D is 3/2. 3648
+            # image size of about 1586x2379 works with batch_size of 1, 
+            # with resize_factor of 2.3 at 28s/image, up to ~25 images.
+            small_dim = min(H,W)
+            large_dim = max(H,W)
+            resize_factor = 1.5 # max(round(small_dim/1586,1), round(large_dim/2379,1))
+            # resize_factor = 1.5
+            print(f"Found {N} images in this chunk,  applying resize_factor {resize_factor} Saving files to {out_dir}.")
+            
+            disp_chunk = []
+            depth_chunk = []
+            # if left_h5_file and right_h5_file:
+            #     try:
+            #         with h5py.File(left_h5_file, 'r') as f:
+            #             left_all = f['data'][()]   # or np.array(f['left'])
+            #         with h5py.File(right_h5_file, 'r') as f:
+            #             right_all = f['data'][()]
+            #     except Exception as e:            
+            #         with h5py.File(left_h5_file, 'r') as f:
+            #             left_all = f['left'][()]   # or np.array(f['left'])
+            #         with h5py.File(right_h5_file, 'r') as f:
+            #             right_all = f['right'][()]
+            
+            #     print(left_all.shape, right_all.shape)
+            
+            # if left_all.ndim==3:
+            #     left_all = left_all[None]
+            #     right_all = right_all[None]
+            
+            # N,C,H,W = left_all.shape
+            # if args.process_only:
+            #     N_stop = args.process_only
+            # else:
+            #     N_stop = N
+            # N_max = N_stop
+            # aspect ratio for Canon EOS 6D is 3/2. 3648
+            # image size of about 1586x2379 works with batch_size of 1, 
+            # with resize_factor of 2.3 at 28s/image, up to ~25 images.
+            # small_dim = min(H,W)
+            # large_dim = max(H,W)
 
-    disp_all = np.concatenate(disp_all, axis=0).reshape(N_max,round(H/resize_factor),round(W/resize_factor)).astype(np.float16)
-    depth_all = np.concatenate(depth_all, axis=0).reshape(N_max,round(H/resize_factor),round(W/resize_factor)).astype(np.float16)
+            # resize_factor = 1#max(round(small_dim/1586,1), round(large_dim/2379,1))
+            # resize_factor = 1.5
+            # print(f"Found {N} images,  applying resize_factor {resize_factor} Saving files to {out_dir}.")
+            args.max_disp = int(np.ceil(W/resize_factor/4/64/3)*64*3)
+            #print("args.max_disp", args.max_disp)
+        
+            # Process in batches
+            with torch.no_grad():
+                for i in tqdm(range(0, N, batch_size), desc="Processing batches"):            
+                    img0 = left_chunk[i:i+batch_size]
+                    img1 = right_chunk[i:i+batch_size]
 
-    with h5py.File(f'{args.out_dir}/leftview_disp_depth.h5', 'w') as f:
-      f.create_dataset('disp', data=disp_all, compression='gzip')
-      f.create_dataset('depth', data=depth_all, compression='gzip')      
+                    if len(img0.shape)==3:
+                        img0 = img0[None,...]
+
+                    if len(img1.shape)==3:
+                        img1 = img1[None,...]
+
+                    # image size of about 1500x2300 works with batch_size of 1, 
+                    # with resize_factor of 1.5 at 28s/image, up to ~25 images.
+
+                    img0 = resize_batch(img0, round(H/resize_factor) ,round(W/resize_factor))
+                    img1 = resize_batch(img1, round(H/resize_factor), round(W/resize_factor))
+
+                    img0 = torch.as_tensor(img0).cuda().float()
+                    img1 = torch.as_tensor(img1).cuda().float()
+
+                    padder = InputPadder(img0.shape, divis_by=32)
+                    img0, img1 = padder.pad(img0, img1)            
+                    img0, pad_hw = pad_to_even_multiple(img0, 8)
+                    img1, _      = pad_to_even_multiple(img1, 8)
+
+                    print(img0.shape, img1.shape)
+
+                    # Load batch
+                    # left_batch = left_data[i:i+batch_size]
+                    # right_batch = right_data[i:i+batch_size]
+                    
+                    # # Convert to tensor and process
+                    # image1 = torch.from_numpy(left_batch).permute(0, 3, 1, 2).float().cuda()
+                    # image2 = torch.from_numpy(right_batch).permute(0, 3, 1, 2).float().cuda()
+                    
+                    # padder = InputPadder(image1.shape, divis_by=32)
+                    # image1, image2 = padder.pad(image1, image2)
+
+                    
+                    with autocast("cuda", enabled=mixed_prec):
+                        flow_pr = model(img0, img1, iters=iters, test_mode=True)
+                    
+                    # Handle different model outputs
+                    if isinstance(flow_pr, (list, tuple)):
+                        flow_pr = flow_pr[-1]  # Take the last output if model returns multiple
+                    
+                    flow_pr = padder.unpad(flow_pr).cpu().numpy()
+                    
+                    # Convert flow to disparity (assuming horizontal flow)
+                    disp = flow_pr[:, 0, :, :]  # Take x-component of flow as disparity
+                    
+                    # Calculate depth
+                    depth = f_left * baseline / (np.abs(disp) + 1e-6)
+                    
+                    # Save results
+                    disp_chunk.append(disp)
+                    depth_chunk.append(depth)
+                    # disp_[i:i+batch_size] = disp.astype('float16')
+                    # depth_dset[i:i+batch_size] = depth.astype('float16')
+                    if i+args.batch_size >= N_stop:
+                        N_max = i + img0.shape[0]
+                        break
+
+                disp_chunk = np.concatenate(disp_chunk, axis=0).reshape(N_max,round(H/resize_factor),round(W/resize_factor)).astype(np.float16)
+                depth_chunk = np.concatenate(depth_chunk, axis=0).reshape(N_max,round(H/resize_factor),round(W/resize_factor)).astype(np.float16)
+
+                write_h5_chunk(f'{args.out_dir}/leftview_disp_depth.h5', 'disp', disp_chunk, prev_start_idx, shape=(N_max,round(H/resize_factor),round(W/resize_factor)),dtype=np.float16)
+                write_h5_chunk(f'{args.out_dir}/leftview_disp_depth.h5', 'depth', depth_chunk, prev_start_idx, shape=(N_max,round(H/resize_factor),round(W/resize_factor)),dtype=np.float16)
+
+            # with h5py.File(f'{args.out_dir}/leftview_disp_depth.h5', 'w') as f:
+            # f.create_dataset('disp', data=disp_chunk, compression='gzip')
+            # f.create_dataset('depth', data=depth_chunk, compression='gzip')      
     print(f"Saved results to {args.out_dir}")
     return 
 
