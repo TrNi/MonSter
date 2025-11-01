@@ -679,8 +679,8 @@ def batched_stereo_inference(args, left_h5_file, right_h5_file, out_dir, stereo_
                 disp_chunk = np.concatenate(disp_chunk, axis=0).reshape(N_max,round(H/resize_factor),round(W/resize_factor)).astype(np.float16)
                 depth_chunk = np.concatenate(depth_chunk, axis=0).reshape(N_max,round(H/resize_factor),round(W/resize_factor)).astype(np.float16)
 
-                write_h5_chunk(f'{args.out_dir}/leftview_disp_depth.h5', 'disp', disp_chunk, prev_start_idx, shape=(N_max,round(H/resize_factor),round(W/resize_factor)),dtype=np.float16)
-                write_h5_chunk(f'{args.out_dir}/leftview_disp_depth.h5', 'depth', depth_chunk, prev_start_idx, shape=(N_max,round(H/resize_factor),round(W/resize_factor)),dtype=np.float16)
+                write_h5_chunk(f'{args.out_dir}/leftview_disp_depth.h5', 'disp', disp_chunk, prev_start_idx, shape=(chunk_size*10,round(H/resize_factor),round(W/resize_factor)),dtype=np.float16)
+                write_h5_chunk(f'{args.out_dir}/leftview_disp_depth.h5', 'depth', depth_chunk, prev_start_idx, shape=(chunk_size*10,round(H/resize_factor),round(W/resize_factor)),dtype=np.float16)
 
             # with h5py.File(f'{args.out_dir}/leftview_disp_depth.h5', 'w') as f:
             # f.create_dataset('disp', data=disp_chunk, compression='gzip')
