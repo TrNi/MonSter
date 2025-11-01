@@ -545,7 +545,7 @@ def batched_stereo_inference(args, left_h5_file, right_h5_file, out_dir, stereo_
             if actual_left_size == 0:
                 break
             start_idx += actual_left_size
-            full_size = max(full_size_left, full_size_right) # total length of the dataset
+            full_size = min(full_size_left, full_size_right) # total length of the dataset
             # try:
             #     with h5py.File(args.left_h5_file, 'r') as f:
             #         left_all = f['data'][()]   # or np.array(f['left'])
